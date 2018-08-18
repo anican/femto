@@ -1,3 +1,5 @@
+#include<ctype.h>
+#include<stdio.h>
 #include<stdlib.h>
 #include<termios.h>
 #include<unistd.h>
@@ -16,15 +18,24 @@ void enableRawMode() {
     atexit(disableRawMode); // Disables raw mode when program exits
 
     struct termios raw = orig_termios;
-    raw.c_lflag &= ~(ECHO); // disables printing each key to terminal
+    // Reading input byte by byte
+    raw.c_lflag &= ~(ECHO | ICANON);
 
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
 }
 
 int main() {
     enableRawMode();
+
     char c;
-    while (read(STDIN_FILENO, &c, 1) == 1 && c != 'q');
+    while (read(STDIN_FILENO, &c, 1) == 1 && c != 'q') {
+        if (iscntrl(c)) {
+            printf("%d\n", c);
+        } else {
+            printf("%d ('%c')\n", c, c);
+        }
+    }
+
     return 0;
 }
 
