@@ -1,4 +1,8 @@
 /*** includes ***/
+#define _DEFAULT_SOURCE
+#define _BSD_SOURCE
+#define _GNU_SOURCE
+
 #include<string.h>
 #include<ctype.h>
 #include<errno.h>
@@ -7,13 +11,37 @@
 #include<termios.h>
 #include<unistd.h>
 #include<sys/ioctl.h>
+#include<sys/types.h>
 
 /*** fields ***/
 
+#define FEMTO_VERS "1.0.0"
 #define CTRL_KEY(k) ((k) & 0x1f)
+
+enum editorKey {
+    ARROW_LEFT = 1000,
+    ARROW_RIGHT,
+    ARROW_DOWN,
+    ARROW_UP,
+    PAGE_UP,
+    PAGE_DOWN,
+    HOME_KEY,
+    END_KEY,
+    DEL_KEY
+};
+typedef struct erow {
+    int size;
+    char* chars;
+} erow;
+
 struct editorConfig {
+    int cursorX;
+    int cursorY;
+    int rowoff;
     int screenRows;
     int screenCols;
+    int nrows;
+    erow* row;
     struct termios orig_termios; // stores original attrib. of terminal before opening femto
 };
 
@@ -55,13 +83,67 @@ void enableRawMode() {
 }
 
 // waits for one keypress and returns it
-char editorReadKey() {
+int editorReadKey() {
     int nread;
     char c;
     while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
         if (nread == -1 && errno != EAGAIN) die("read");
     }
-    return c;
+    if (c == '\x1b') {
+        char seq[3];
+
+        if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
+        if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
+
+        if (seq[0] == '[') {
+            if (seq[1] >= '0' && seq[1] <= '9') {
+                if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b';
+                if (seq[2] == '~') {
+                    switch (seq[1]) {
+                        case '1':
+                            return HOME_KEY;
+                        case '3':
+                            return DEL_KEY;
+                        case '4':
+                            return END_KEY;
+                        case '5':
+                            return PAGE_UP;
+                        case '6':
+                            return PAGE_DOWN;
+                        case '7':
+                            return HOME_KEY;
+                        case '8':
+                            return END_KEY;
+                    }
+                }
+            } else {
+                switch (seq[1]) {
+                    case 'A':
+                        return ARROW_UP;
+                    case 'B':
+                        return ARROW_DOWN;
+                    case 'C':
+                        return ARROW_RIGHT;
+                    case 'D':
+                        return ARROW_LEFT;
+                    case 'H':
+                        return HOME_KEY;
+                    case 'F':
+                        return END_KEY;
+                }
+            }
+        } else if (seq[0] == '0') {
+            switch (seq[1]) {
+                case 'H':
+                    return HOME_KEY;
+                case 'F':
+                    return END_KEY;
+            }
+        }
+        return '\x1b';
+    } else {
+        return c;
+    }
 }
 
 int getCursorPosition(int* rows, int* cols) {
@@ -96,6 +178,39 @@ int getWindowSize(int* rows, int* cols) {
     }
 }
 
+/*** row operations ***/
+void editorAppendRow(char* s, size_t len) {
+    E.row = realloc(E.row, sizeof(erow) * (E.nrows + 1));
+
+    int at = E.nrows;
+    E.row[at].size = len;
+    E.row[at].chars = malloc(len + 1);
+    memcpy(E.row[at].chars, s, len);
+    E.row[at].chars[len] = '\0';
+    E.nrows++;
+}
+
+/*** file io ***/
+void editorOpen(char* filename) {
+    FILE *fp = fopen(filename, "r");
+    if (!fp) die("fopen");
+
+    char* line = NULL;
+    size_t linecap = 0;
+    ssize_t linelen;
+    while ((linelen = getline(&line, &linecap, fp)) != -1) {
+        // strips last character if it is carriage return or newline
+        while (linelen > 0 && (line[linelen - 1] == '\n' ||
+                               line[linelen - 1] == '\r')) {
+            linelen--;
+        }
+        editorAppendRow(line, linelen);
+    }
+    free(line);
+    fclose(fp);
+}
+
+
 /*** mutable string buffer ***/
 struct abuf {
     char* b;
@@ -118,10 +233,41 @@ void abFree(struct abuf* ab) {
 }
 
 /*** output ***/
+void editorScroll() {
+    if (E.cursorY < E.rowoff) {
+        E.rowoff = E.cursorY;
+    }
+    if (E.cursorY >= E.rowoff + E.screenRows) {
+        E.rowoff = E.cursorY - E.screenRows + 1;
+    }
+}
+
 void editorDrawRows(struct abuf* ab) {
     for (int y = 0; y < E.screenRows; y++) {
-        abAppend(ab, "~", 1);
-
+        int filerow = y + E.rowoff;
+        if (filerow >= E.nrows) { //drawing row before or after end of text buffer
+            if (E.nrows == 0 && y == E.screenRows / 3) {
+                char greeting[80];
+                int greetinglen = snprintf(greeting, sizeof(greeting), " Femto by Anirudh Canumalla -- Version: %s", FEMTO_VERS);
+                if (greetinglen > E.screenCols) greetinglen = E.screenCols;
+                // to center a string: divide screen width by 2 and subtract half of str
+                // length from that
+                int padding = (E.screenCols - greetinglen) / 2;
+                if (padding) {
+                    abAppend(ab, "~", 1);
+                    padding--;
+                }
+                while (padding--) abAppend(ab, " ", 1);
+                abAppend(ab, greeting, greetinglen);
+            } else {
+                abAppend(ab, "~", 1);
+            }
+        } else {
+            int len = E.row[filerow].size;
+            if (len > E.screenCols) len = E.screenCols;
+            abAppend(ab, E.row[filerow].chars, len);
+        }
+        abAppend(ab, "\x1b[K", 3);
         if (y < E.screenRows - 1) {
             abAppend(ab, "\r\n", 2);
         }
@@ -129,15 +275,22 @@ void editorDrawRows(struct abuf* ab) {
 }
 
 void editorRefreshScreen() {
+    editorScroll();
+
     struct abuf ab = ABUF_INIT;
-    // specifies number of bytes we are writing: \x1b is <esc> key
-    abAppend(&ab, "\x1b[2J", 4);
+
+    abAppend(&ab, "\x1b[?25l", 6);
     // repositions cursor at row=1;col=1
     abAppend(&ab, "\x1b[H", 3);
 
     editorDrawRows(&ab);
+
     // reposition after drawing '~'s
-    abAppend(&ab, "\x1b[H", 3);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cursorY - E.rowoff) + 1, E.cursorX + 1);
+
+    abAppend(&ab, buf, strlen(buf));
+    abAppend(&ab, "x1b[?25h", 6);
 
     write(STDOUT_FILENO, ab.b, ab.len);
     abFree(&ab);
@@ -145,9 +298,35 @@ void editorRefreshScreen() {
 
 /*** input: mapping keys to functions ***/
 
+//allows user to move around screen
+void editorMoveCursor(int key) {
+    switch (key) {
+        case ARROW_LEFT:
+            if (E.cursorX != 0) {
+                E.cursorX--;
+            }
+            break;
+        case ARROW_RIGHT:
+            if (E.cursorX != E.screenCols - 1) {
+                E.cursorX++;
+            }
+            break;
+        case ARROW_UP:
+            if (E.cursorY != 0) {
+                E.cursorY--;
+            }
+            break;
+        case ARROW_DOWN:
+            if (E.cursorY < E.nrows) {
+                E.cursorY++;
+            }
+            break;
+    }
+}
+
 // waits for keypress and returns it
 void editorProcessKeypress() {
-    char c = editorReadKey();
+    int c = editorReadKey();
 
     switch (c) {
         case CTRL_KEY('q'):
@@ -155,17 +334,51 @@ void editorProcessKeypress() {
             write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
             break;
+        case HOME_KEY:
+            E.cursorX = 0;
+            break;
+
+        case END_KEY:
+            E.cursorX = E.screenCols - 1;
+            break;
+
+        case PAGE_UP:
+        case PAGE_DOWN:
+            {
+                int times = E.screenRows;
+                while (times--) {
+                    editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
+                }
+            }
+            break;
+
+        case ARROW_UP:
+        case ARROW_DOWN:
+        case ARROW_LEFT:
+        case ARROW_RIGHT:
+            editorMoveCursor(c);
+            break;
     }
 }
 
 /*** initialize ***/
 void initEditor() {
+    E.cursorX = 0;
+    E.cursorY = 0;
+    E.rowoff = 0;
+    E.nrows = 0;
+    E.row = NULL;
+
     if (getWindowSize(&E.screenRows, &E.screenCols) == -1) die("getWindowSize");
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     enableRawMode();
     initEditor();
+    if (argc >= 2) {
+        // opens filename specified
+        editorOpen(argv[1]);
+    }
 
     while (1) {
         editorRefreshScreen();
