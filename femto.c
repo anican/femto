@@ -38,6 +38,7 @@ struct editorConfig {
     int cursorX;
     int cursorY;
     int rowoff;
+    int coloff;
     int screenRows;
     int screenCols;
     int nrows;
@@ -240,6 +241,12 @@ void editorScroll() {
     if (E.cursorY >= E.rowoff + E.screenRows) {
         E.rowoff = E.cursorY - E.screenRows + 1;
     }
+    if (E.cursorX < E.coloff) {
+        E.coloff = E.cursorX;
+    }
+    if (E.cursorX >= E.coloff + E.screenCols) {
+        E.coloff = E.cursorX - E.screenCols + 1;
+    }
 }
 
 void editorDrawRows(struct abuf* ab) {
@@ -263,9 +270,10 @@ void editorDrawRows(struct abuf* ab) {
                 abAppend(ab, "~", 1);
             }
         } else {
-            int len = E.row[filerow].size;
+            int len = E.row[filerow].size - E.coloff;
+            if (len < 0) len = 0;
             if (len > E.screenCols) len = E.screenCols;
-            abAppend(ab, E.row[filerow].chars, len);
+            abAppend(ab, &E.row[filerow].chars[E.coloff], len);
         }
         abAppend(ab, "\x1b[K", 3);
         if (y < E.screenRows - 1) {
@@ -287,7 +295,9 @@ void editorRefreshScreen() {
 
     // reposition after drawing '~'s
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cursorY - E.rowoff) + 1, E.cursorX + 1);
+    // "\x1b[%d;%dH"
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
+            (E.cursorY - E.rowoff) + 1, (E.cursorX - E.coloff) + 1);
 
     abAppend(&ab, buf, strlen(buf));
     abAppend(&ab, "x1b[?25h", 6);
@@ -300,6 +310,8 @@ void editorRefreshScreen() {
 
 //allows user to move around screen
 void editorMoveCursor(int key) {
+    erow* row = (E.cursorY >= E.nrows) ? NULL : &E.row[E.cursorY];
+
     switch (key) {
         case ARROW_LEFT:
             if (E.cursorX != 0) {
@@ -307,7 +319,7 @@ void editorMoveCursor(int key) {
             }
             break;
         case ARROW_RIGHT:
-            if (E.cursorX != E.screenCols - 1) {
+            if (row && E.cursorX < row->size) {
                 E.cursorX++;
             }
             break;
@@ -321,6 +333,11 @@ void editorMoveCursor(int key) {
                 E.cursorY++;
             }
             break;
+    }
+    row = (E.cursorY >= E.nrows) ? NULL : &E.row[E.cursorY];
+    int rowlen = row ? row->size : 0;
+    if (E.cursorX > rowlen) {
+        E.cursorX = rowlen;
     }
 }
 
@@ -366,6 +383,7 @@ void initEditor() {
     E.cursorX = 0;
     E.cursorY = 0;
     E.rowoff = 0;
+    E.coloff = 0;
     E.nrows = 0;
     E.row = NULL;
 
