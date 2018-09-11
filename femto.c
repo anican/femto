@@ -1,3 +1,4 @@
+// current position is at "Enter" on the fifth one
 /*** includes ***/
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
@@ -63,6 +64,8 @@ struct editorConfig E;
 
 /*** prototypes ***/
 void editorSetStatusMessage(const char* fmt, ...);
+void editorRefreshScreen();
+char* editorPrompt(char* prompt);
 
 /*** terminal settings/terminal input ***/
 void die(const char* sh) {
@@ -230,10 +233,12 @@ void editorUpdateRow(erow* row) {
     row->rsize = idx;
 }
 
-void editorAppendRow(char* s, size_t len) {
-    E.row = realloc(E.row, sizeof(erow) * (E.nrows + 1));
+void editorInsertRow(int at, char* s, size_t len) {
+    if (at < 0 || at > E.nrows) return;
 
-    int at = E.nrows;
+    E.row = realloc(E.row, sizeof(erow) * (E.nrows + 1));
+    memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.nrows - at));
+
     E.row[at].size = len;
     E.row[at].chars = malloc(len + 1);
     memcpy(E.row[at].chars, s, len);
@@ -290,10 +295,25 @@ void editorRowDelChar(erow* row, int at) {
 
 void editorInsertChar(int c) {
     if (E.cursorY == E.nrows) {
-        editorAppendRow("", 0);
+        editorInsertRow(E.nrows, "", 0);
     }
     editorRowInsertChar(&E.row[E.cursorY], E.cursorX, c);
     E.cursorX++;
+}
+
+void editorInsertNewline() {
+    if (E.cursorX == 0) {
+        editorInsertRow(E.cursorY, "", 0);
+    } else {
+        erow* row = &E.row[E.cursorY];
+        editorInsertRow(E.cursorY + 1, &row->chars[E.cursorX], row->size - E.cursorX);
+        row = &E.row[E.cursorY];
+        row->size = E.cursorX;
+        row->chars[row->size] = '\0';
+        editorUpdateRow(row);
+    }
+    E.cursorY++;
+    E.cursorX = 0;
 }
 
 void editorDelChar() {
@@ -351,7 +371,7 @@ void editorOpen(char* filename) {
                                line[linelen - 1] == '\r')) {
             linelen--;
         }
-        editorAppendRow(line, linelen);
+        editorInsertRow(E.nrows, line, linelen);
     }
     free(line);
     fclose(fp);
@@ -359,7 +379,13 @@ void editorOpen(char* filename) {
 }
 
 void editorSave() {
-    if (E.filename == NULL) return;
+    if (E.filename == NULL) {
+        E.filename = editorPrompt("Save as: %s (ESC to cancel)");
+        if (E.filename == NULL) {
+            editorSetStatusMessage("Save aborted");
+            return;
+        }
+    }
 
     int len;
     char* buf = editorRowsToString(&len);
@@ -382,6 +408,26 @@ void editorSave() {
     free(buf);
 
     editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
+}
+
+/*** find ***/
+
+void editorFind() {
+    char* query = editorPrompt("Search: %s (ESC to cancel)");
+    if (query == NULL) return;
+
+    for (int i = 0; i < E.nrows; i++) {
+        erow* row = &E.row[i];
+        char* match = strstr(row->render, query);
+        if (match) {
+            E.cursorY = i;
+            E.cursorX = match - row->render;
+            E.rowoff = E.nrows;
+            break;
+        }
+    }
+
+    free(query);
 }
 
 /*** mutable string buffer ***/
@@ -523,6 +569,43 @@ void editorSetStatusMessage(const char* fmt, ...) {
 
 /*** input: mapping keys to functions ***/
 
+// allows user to "save a file as" when ./femto is entered with no arguments
+char* editorPrompt(char* prompt) {
+    size_t bufsize = 128;
+    char* buf = malloc(bufsize);
+
+    size_t buflen = 0;
+    buf[0] = '\0';
+
+    while (1) {
+        editorSetStatusMessage(prompt, buf);
+        editorRefreshScreen();
+
+        int c = editorReadKey();
+        if (c == DEL_KEY || c == CTRL_KEY('h') || c == BACKSPACE) {
+            if (buflen != 0) {
+                buf[--buflen] = '\0';
+            }
+        } else if (c == '\x1b') {
+            editorSetStatusMessage("");
+            free(buf);
+            return NULL;
+        } else if (c == '\r') {
+            if (buflen != 0) {
+                editorSetStatusMessage("");
+                return buf;
+            }
+        } else if (!iscntrl(c) && c < 128) {
+            if (buflen == bufsize - 1) {
+                bufsize *= 2;
+                buf = realloc(buf, bufsize);
+            }
+            buf[buflen++] = c;
+            buf[buflen] = '\0';
+        }
+    }
+}
+
 //allows user to move around screen
 void editorMoveCursor(int key) {
     erow* row = (E.cursorY >= E.nrows) ? NULL : &E.row[E.cursorY];
@@ -572,7 +655,7 @@ void editorProcessKeypress() {
 
     switch (c) {
         case '\r': // enter key
-            /* TODO */
+            editorInsertNewline();
             break;
 
         case CTRL_KEY('q'):
