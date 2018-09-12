@@ -1,5 +1,5 @@
 # femto
-An extensible text editor in the style of vim and nano
+An extensible text editor in the style of vim and nano.
 femto is supported on MacOS, Cygwin, and Linux distributions
 
 Windows support forthcoming... I still need to learn the basics of batch scripting
