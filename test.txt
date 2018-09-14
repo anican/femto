@@ -1,3 +1,2 @@
-Writing a test in femto.
-To save this file hit CTRL-S, to quit hit CTRL-Q
-To edit an existing file, follow the ./femto command with the name of your file
+Anirudh Canumalla is the best :)
+

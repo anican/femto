@@ -36,3 +36,5 @@ CTRL-Q to quit
 - edit Makefile, install.sh, and README.md to reflect reallocation int /bin and /src
 - add uninstall.sh
 - add clean feature to Makefile
+- https://stackoverflow.com/questions/7131670/make-a-bash-alias-that-takes-a-parameter
+- make quitting, searching, and saving more like VI 
