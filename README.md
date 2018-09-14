@@ -1,5 +1,5 @@
 # femto
-An extensible text editor in the style of vim and nano
+An extensible text editor in the style of vim and nano.
 femto is supported on MacOS, Cygwin, and Linux distributions
 
 Windows support forthcoming... I still need to learn the basics of batch scripting
@@ -7,8 +7,7 @@ Windows support forthcoming... I still need to learn the basics of batch scripti
 ## Introduction
 After adopting vim (more recently, neovim) as my primary text editor, I became increasingly fascinated with how
 text editors work, and this project is my attempt to learn more about the C programming
-language and text editor internals. Text-editor technology is super old but still extremely
-useful. I figure it couldn't hurt to know to build one.
+language and text editor internals. 
 
 ## Installation
 Installation is super easy. Just follow the steps below:
